@@ -1,39 +1,42 @@
 package org.example;
+
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 
 /**
- * Логика диалога чат-бота.
- * Отвечает на команду /start (приветствие и описание возможностей),
- * команду /help (повторное описание) и возвращает текст пользователя.
+ * Класс, содержащий бизнес-логику обработки текстовых сообщений.
  */
 public class BotLogic {
 
-    /** Текст приветствия при старте диалога и по команде /help. */
-    private static final String HELP_TEXT =
-            "Привет! Я - Repetition-Bot.\n"
-                    + "Я умею:\n"
-                    + "- возвращать любой текст, который ты пришлёшь;\n"
-                    + "- по команде /help снова рассказывать, как со мной взаимодействовать.\n";
+    /** Текст справки и приветствия. */
+    private static final String HELP_TEXT = "Привет! Я эхо-бот.\nЯ умею повторять твои сообщения.";
 
     /**
-     * Создаёт ответ бота на сообщение пользователя.
+     * Обрабатывает входящий текст и возвращает объект ответа SendMessage.
      *
-     * @param chatId идентификатор чата, в который будет отправлен ответ
-     * @param text   текст сообщения пользователя
-     * @return готовый ответ бота в виде объекта SendMessage
+     * @param chatId ID чата
+     * @param text входящий текст
+     * @return сформированное сообщение для отправки
      */
     public SendMessage handleMessage(long chatId, String text) {
-        SendMessage message = new SendMessage();
-        message.setChatId(String.valueOf(chatId));
+        SendMessage response = new SendMessage();
+        response.setChatId(String.valueOf(chatId));
 
-        String trimmedText = text.trim();
-
-        if ("/start".equals(trimmedText) || "/help".equals(trimmedText)) {
-            message.setText(HELP_TEXT);
-        } else {
-            message.setText("Вы написали \"" + trimmedText + "\"");
+        // 1. Проверка на пустое сообщение или пробелы
+        if (text == null || text.isBlank()) {
+            response.setText("Вы отправили пустое сообщение.");
+            return response;
         }
 
-        return message;
+        String trimmed = text.trim();
+
+        // 2. Проверка на команды /start и /help
+        if ("/start".equals(trimmed) || "/help".equals(trimmed)) {
+            response.setText(HELP_TEXT);
+            return response;
+        }
+
+        // 3. Эхо-ответ на обычный текст
+        response.setText("Вы ввели \"" + trimmed + "\"");
+        return response;
     }
 }
