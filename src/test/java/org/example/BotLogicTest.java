@@ -4,8 +4,14 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 
+/**
+ * Класс для модульного (юнит) тестирования бизнес-логики бота {@link BotLogic}.
+ */
 public class BotLogicTest {
 
+    /**
+     * Тестирует обработку различных типов входящих текстовых сообщений.
+     */
     @Test
     void testHandleMessage() {
         BotLogic botLogic = new BotLogic();
