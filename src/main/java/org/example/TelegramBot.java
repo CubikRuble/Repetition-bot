@@ -3,7 +3,7 @@ package org.example;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.Update;
-
+import org.telegram.telegrambots.meta.api.objects.Message;
 /**
  * Класс Telegram-бота, отвечающий за взаимодействие с API TelegramBots.
  * Принимает обновления от пользователей и отправляет сформированные ответы.
@@ -59,7 +59,7 @@ public class TelegramBot extends TelegramLongPollingBot {
     @Override
     public void onUpdateReceived(Update update) {
         if (update.hasMessage() && update.getMessage().hasText()) {
-            var msg = update.getMessage();
+            Message msg = update.getMessage();
 
             SendMessage response = botLogic.handleMessage(msg.getChatId(), msg.getText());
 
