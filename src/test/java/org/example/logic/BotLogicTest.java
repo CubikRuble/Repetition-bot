@@ -1,6 +1,5 @@
 package org.example.logic;
 
-import org.example.storage.InMemoryWatchlistStorage;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
