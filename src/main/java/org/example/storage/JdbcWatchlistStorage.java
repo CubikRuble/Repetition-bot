@@ -8,91 +8,124 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import org.example.catalog.Movie;
 
 /**
- * Хранилище на JDBC и SQLite: данные сохраняются между запусками программы.
- * Все операции с единственным соединением синхронизированы.
+ * Реализация хранилища на JDBC: списки пользователей лежат в таблице базы данных
+ * (фильм сохраняется целиком, вместе с идентификатором Кинопоиска) и не пропадают после перезапуска бота. Рассчитана на SQLite, но использует только
+ * стандартный SQL. Класс сам управляет соединениями: каждая операция открывает своё соединение
+ * и закрывает его до возврата, поэтому снаружи нечего закрывать, а общего состояния,
+ * которое нужно защищать блокировками, нет.
  */
-public class JdbcWatchlistStorage implements WatchlistStorage, AutoCloseable {
-
-    /** Создание таблицы списков; порядок строк (id) задаёт порядок добавления. */
-    private static final String CREATE_TABLE_SQL = "CREATE TABLE IF NOT EXISTS watchlist "
-            + "(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, title TEXT NOT NULL)";
-
-    /** Выбор всех фильмов пользователя в порядке добавления. */
-    private static final String SELECT_SQL = "SELECT title FROM watchlist WHERE user_id = ? ORDER BY id";
-
-    /** Добавление фильма пользователю. */
-    private static final String INSERT_SQL = "INSERT INTO watchlist (user_id, title) VALUES (?, ?)";
-
-    /** Удаление самой ранней записи с таким названием у пользователя. */
-    private static final String DELETE_SQL = "DELETE FROM watchlist WHERE id = "
-            + "(SELECT MIN(id) FROM watchlist WHERE user_id = ? AND title = ?)";
-
-    /** Соединение с базой данных. */
-    private final Connection connection;
+public class JdbcWatchlistStorage implements WatchlistStorage {
 
     /**
-     * Открывает базу данных и создаёт таблицу, если её ещё нет.
-     *
-     * @param jdbcUrl JDBC-адрес базы, например {@code jdbc:sqlite:watchlist.db}
-     * @throws IllegalStateException если базу не удалось открыть
+     * Запрос, создающий таблицу фильмов, если её ещё нет. Порядок добавления задаёт столбец id,
+     * а пара (user_id, movie_id) уникальна: один фильм Кинопоиска не попадает в список дважды.
+     */
+    private static final String CREATE_TABLE_SQL = "CREATE TABLE IF NOT EXISTS watchlist_movies ("
+            + "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, movie_id INTEGER NOT NULL, "
+            + "title TEXT NOT NULL, year INTEGER NOT NULL, rating REAL NOT NULL, UNIQUE (user_id, movie_id))";
+
+    /** Запрос на получение фильмов пользователя в порядке добавления. */
+    private static final String SELECT_SQL = "SELECT movie_id, title, year, rating FROM watchlist_movies WHERE user_id = ? ORDER BY id";
+
+    /** Запрос на добавление фильма; повторное добавление того же фильма игнорируется. */
+    private static final String INSERT_SQL = "INSERT INTO watchlist_movies (user_id, movie_id, title, year, rating) VALUES (?, ?, ?, ?, ?) ON CONFLICT (user_id, movie_id) DO NOTHING";
+
+    /** Запрос на удаление фильма пользователя по идентификатору Кинопоиска. */
+    private static final String DELETE_SQL = "DELETE FROM watchlist_movies WHERE user_id = ? AND movie_id = ?";
+
+    /** Адрес базы данных в формате JDBC. */
+    private final String jdbcUrl;
+
+    /**
+     * Запоминает адрес базы данных и создаёт таблицу, если её ещё нет.
+     * @param jdbcUrl адрес базы данных, например {@code jdbc:sqlite:watchlist.db}; для базы в
+     * оперативной памяти не подходит, так как у каждого соединения она была бы своя
+     * @throws IllegalStateException если базу не удалось открыть или подготовить
      */
     public JdbcWatchlistStorage(String jdbcUrl) {
-        try {
-            connection = DriverManager.getConnection(jdbcUrl);
-            try (Statement statement = connection.createStatement()) {
-                statement.executeUpdate(CREATE_TABLE_SQL);
-            }
+        this.jdbcUrl = jdbcUrl;
+        try (Connection connection = openConnection();
+             Statement statement = connection.createStatement()) {
+            statement.executeUpdate(CREATE_TABLE_SQL);
         } catch (SQLException e) {
-            throw new IllegalStateException("Не удалось открыть базу данных " + jdbcUrl, e);
+            throw new IllegalStateException("Не удалось подготовить базу данных " + jdbcUrl, e);
         }
     }
 
+    /**
+     * Возвращает неизменяемый список фильмов пользователя в порядке добавления.
+     * @param userId идентификатор пользователя
+     * @return фильмы пользователя; пустой список, если у пользователя нет фильмов
+     * @throws IllegalStateException если запрос к базе не удался
+     */
     @Override
-    public synchronized List<String> getAll(long userId) {
-        try (PreparedStatement statement = connection.prepareStatement(SELECT_SQL)) {
+    public List<Movie> getAll(long userId) {
+        try (Connection connection = openConnection();
+             PreparedStatement statement = connection.prepareStatement(SELECT_SQL)) {
             statement.setLong(1, userId);
             try (ResultSet rows = statement.executeQuery()) {
-                List<String> titles = new ArrayList<>();
+                List<Movie> movies = new ArrayList<>();
                 while (rows.next()) {
-                    titles.add(rows.getString("title"));
+                    movies.add(new Movie(rows.getLong("movie_id"), rows.getString("title"),
+                            rows.getInt("year"), rows.getDouble("rating")));
                 }
-                return List.copyOf(titles);
+                return List.copyOf(movies);
             }
         } catch (SQLException e) {
             throw new IllegalStateException("Не удалось прочитать список пользователя " + userId, e);
         }
     }
 
+    /**
+     * Добавляет фильм в конец списка пользователя, если его там ещё нет.
+     * @param userId идентификатор пользователя
+     * @param movie фильм, который сохраняется целиком
+     * @return {@code true}, если фильм добавлен; {@code false}, если он уже был в списке
+     * @throws IllegalStateException если запись в базу не удалась
+     */
     @Override
-    public synchronized void add(long userId, String title) {
-        try (PreparedStatement statement = connection.prepareStatement(INSERT_SQL)) {
+    public boolean add(long userId, Movie movie) {
+        try (Connection connection = openConnection();
+             PreparedStatement statement = connection.prepareStatement(INSERT_SQL)) {
             statement.setLong(1, userId);
-            statement.setString(2, title);
-            statement.executeUpdate();
+            statement.setLong(2, movie.id());
+            statement.setString(3, movie.title());
+            statement.setInt(4, movie.year());
+            statement.setDouble(5, movie.rating());
+            return statement.executeUpdate() > 0;
         } catch (SQLException e) {
             throw new IllegalStateException("Не удалось добавить фильм пользователю " + userId, e);
         }
     }
 
+    /**
+     * Удаляет фильм из списка пользователя.
+     * @param userId идентификатор пользователя
+     * @param movieId идентификатор фильма на Кинопоиске
+     * @return {@code true}, если фильм был найден и удалён
+     * @throws IllegalStateException если запрос к базе не удался
+     */
     @Override
-    public synchronized boolean remove(long userId, String title) {
-        try (PreparedStatement statement = connection.prepareStatement(DELETE_SQL)) {
+    public boolean remove(long userId, long movieId) {
+        try (Connection connection = openConnection();
+             PreparedStatement statement = connection.prepareStatement(DELETE_SQL)) {
             statement.setLong(1, userId);
-            statement.setString(2, title);
+            statement.setLong(2, movieId);
             return statement.executeUpdate() > 0;
         } catch (SQLException e) {
             throw new IllegalStateException("Не удалось удалить фильм у пользователя " + userId, e);
         }
     }
 
-    @Override
-    public synchronized void close() {
-        try {
-            connection.close();
-        } catch (SQLException e) {
-            throw new IllegalStateException("Не удалось закрыть базу данных", e);
-        }
+    /**
+     * Открывает новое соединение с базой данных. Закрывает его тот, кто вызвал метод.
+     * @return открытое соединение
+     * @throws SQLException если соединение открыть не удалось
+     */
+    private Connection openConnection() throws SQLException {
+        return DriverManager.getConnection(jdbcUrl);
     }
 }
