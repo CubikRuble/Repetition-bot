@@ -8,41 +8,41 @@ import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
 /**
- * Адаптер Telegram: принимает сообщения от платформы, передаёт их в {@link BotLogic}
- * и отправляет ответ обратно в чат.
+ * Telegram-адаптер: принимает обновления от Telegram, передаёт текст в логику бота
+ * и отправляет полученный ответ в тот же чат. Вся работа с Telegram API сосредоточена здесь.
  */
 public class TelegramBot extends TelegramLongPollingBot {
 
-    /** Имя бота в Telegram. */
-    private static final String BOT_USERNAME_ENV_VAR = "BOT_USERNAME";
+    /** Имя бота, зарегистрированное в Telegram. */
+    private static final String BOT_USERNAME = "BOT_USERNAME";
 
-    /** Имя переменной окружения, в которой хранится токен бота. */
+    /** Название переменной окружения, в которой хранится токен бота. */
     private static final String BOT_TOKEN_ENV_VAR = "BOT_TOKEN";
 
-    /** Логика диалога, не зависящая от Telegram. */
+    /** Логика диалога, которой адаптер передаёт тексты сообщений. */
     private final BotLogic botLogic;
 
     /**
-     * Создаёт бота.
-     * @param botLogic логика диалога, которой передаются все текстовые сообщения
+     * Создаёт адаптер для переданной логики бота.
+     * @param botLogic логика диалога
      */
     public TelegramBot(BotLogic botLogic) {
         this.botLogic = botLogic;
     }
 
+    /**
+     * Возвращает имя бота в Telegram.
+     * @return имя пользователя бота
+     */
     @Override
     public String getBotUsername() {
-        String username = System.getenv(BOT_USERNAME_ENV_VAR);
-        if (username == null || username.isBlank()) {
-            throw new IllegalStateException("Переменная окружения " + BOT_USERNAME_ENV_VAR + " не задана!");
-        }
-        return username;
+        return BOT_USERNAME;
     }
 
     /**
-     * Возвращает токен из переменной окружения {@code BOT_TOKEN}.
-     * @return токен бота
-     * @throws IllegalStateException если переменная не задана
+     * Считывает и возвращает API-токен бота из переменной окружения.
+     * @return токен доступа Telegram API
+     * @throws IllegalStateException если переменная окружения BOT_TOKEN не задана или пуста
      */
     @Override
     public String getBotToken() {
@@ -54,9 +54,10 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     /**
-     * Обрабатывает входящее обновление: текстовое сообщение передаётся в логику, ответ отправляется в тот же чат.
-     * Диалоги разных пользователей различаются по идентификатору отправителя.
-     * @param update обновление от Telegram
+     * Обрабатывает входящее обновление: берёт текст сообщения, получает ответ от логики
+     * и отправляет его в чат. Список фильмов определяется отправителем сообщения,
+     * поэтому в групповом чате у каждого участника свой список.
+     * @param update данные о новом событии в Telegram
      */
     @Override
     public void onUpdateReceived(Update update) {
