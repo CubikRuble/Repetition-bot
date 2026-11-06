@@ -47,14 +47,30 @@ class KinopoiskCatalogTest {
     }
 
     /**
-     * Ответ без списка фильмов или не в формате JSON считается сбоем каталога.
+     * Ответ, который не является JSON-объектом (пустой, HTML, массив, обрыв), считается сбоем
+     * каталога с сообщением о невозможности разбора.
      */
     @Test
-    void invalidResponse() {
-        String[] inputs = {"", "<html>502 Bad Gateway</html>", "[]", "{\"message\":\"Unauthorized\"}",
-                "{\"docs\":\"не массив\"}", "{\"docs\":[}"};
+    void unparsableResponse() {
+        String[] inputs = {"", "<html>502 Bad Gateway</html>", "[]", "{\"docs\":[}"};
+
         for (String input : inputs) {
-            Assertions.assertThrows(IOException.class, () -> catalog.parse(input));
+            IOException exception = Assertions.assertThrows(IOException.class, () -> catalog.parse(input));
+            Assertions.assertEquals("Не удалось разобрать ответ Кинопоиска", exception.getMessage());
+        }
+    }
+
+    /**
+     * JSON-объект без массива фильмов (ответ об ошибке доступа или неверный тип поля) считается
+     * сбоем каталога с сообщением об отсутствии списка фильмов.
+     */
+    @Test
+    void noMovieList() {
+        String[] inputs = {"{\"message\":\"Unauthorized\"}", "{\"docs\":\"не массив\"}"};
+
+        for (String input : inputs) {
+            IOException exception = Assertions.assertThrows(IOException.class, () -> catalog.parse(input));
+            Assertions.assertEquals("В ответе Кинопоиска нет списка фильмов", exception.getMessage());
         }
     }
 }
