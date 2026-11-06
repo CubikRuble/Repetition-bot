@@ -25,7 +25,7 @@ public class KinopoiskCatalog implements MovieCatalog {
     private static final String SEARCH_URL = "https://api.kinopoisk.dev/v1.4/movie/search";
 
     /** Название заголовка, в котором передаётся токен доступа. */
-    private static final String TOKEN_HEADER = "KINOPOISK_API_TOKEN";
+    private static final String TOKEN_HEADER = "X-API-KEY";
 
     /** Максимальное время ожидания ответа сайта в секундах. */
     private final int timeoutSeconds = 10;
@@ -47,6 +47,7 @@ public class KinopoiskCatalog implements MovieCatalog {
         this.apiToken = apiToken;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(timeoutSeconds))
+                .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
     }
 
@@ -70,7 +71,13 @@ public class KinopoiskCatalog implements MovieCatalog {
             HttpResponse<String> response = httpClient.send(request,
                     HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (response.statusCode() != httpOk) {
-                throw new IOException("Кинопоиск ответил с кодом " + response.statusCode());
+                String location = response.headers()
+                        .firstValue("Location")
+                        .orElse("не указан");
+                throw new IOException(
+                        "Кинопоиск ответил с кодом " + response.statusCode()
+                                + ". Адрес перенаправления: " + location
+                );
             }
             return parse(response.body());
         } catch (InterruptedException e) {
