@@ -21,8 +21,7 @@ public class BotLogic {
     /** Текст приветствия и справки по командам. */
     private static final String HELP_TEXT = "Привет! Я веду список фильмов «посмотреть позже».\n"
             + "Команды:\n"
-            + "/add <название> — добавить фильм\n"
-            + "/remove <номер или название> — удалить фильм\n"
+            + "/remove <название> — удалить фильм\n"
             + "/list — показать список\n"
             + "/find <название> — найти фильм на Кинопоиске\n"
             + "/save <номер> — добавить в список фильм из последнего поиска\n"
@@ -35,7 +34,7 @@ public class BotLogic {
     /** Ответ, если Кинопоиск не отвечает. */
     private static final String CATALOG_UNAVAILABLE_TEXT = "Не удалось связаться с Кинопоиском. Попробуйте позже";
 
-    /** Ответ при попытке добавить фильм, который уже есть в списке. */
+    /** Ответ при попытке сохранить фильм, который уже есть в списке. */
     private static final String ALREADY_IN_LIST_TEXT = "Этот фильм уже есть в списке";
 
     /** Сколько фильмов показывает команда /find. */
@@ -77,7 +76,6 @@ public class BotLogic {
 
         return switch (command) {
             case "/start", "/help" -> HELP_TEXT;
-            case "/add" -> addMovie(userId, argument);
             case "/remove" -> removeMovie(userId, argument);
             case "/list" -> showList(userId);
             case "/find" -> findMovies(userId, argument);
@@ -88,42 +86,19 @@ public class BotLogic {
     }
 
     /**
-     * Ищет фильм в каталоге по названию и добавляет в список первый найденный.
+     * Удаляет фильм из списка пользователя по названию (без учёта регистра).
+     * Если одноимённых фильмов несколько, удаляется первый из них.
      * @param userId идентификатор пользователя
      * @param title название; пустая строка, если пользователь его не указал
      * @return текст ответа
      */
-    private String addMovie(long userId, String title) {
+    private String removeMovie(long userId, String title) {
         if (title.isEmpty()) {
-            return "Укажите название: /add <название>";
-        }
-        try {
-            List<Movie> found = catalog.search(title, 1);
-            if (found.isEmpty()) {
-                return NOTHING_FOUND_TEXT;
-            }
-            return storage.add(userId, found.get(0)) ? "Фильм добавлен" : ALREADY_IN_LIST_TEXT;
-        } catch (IOException e) {
-            return CATALOG_UNAVAILABLE_TEXT;
-        }
-    }
-
-    /**
-     * Удаляет фильм из списка пользователя. Фильм указывается номером из /list или названием;
-     * если одноимённых фильмов несколько, по названию удаляется первый из них.
-     * @param userId идентификатор пользователя
-     * @param argument номер или название; пустая строка, если их не указали
-     * @return текст ответа
-     */
-    private String removeMovie(long userId, String argument) {
-        if (argument.isEmpty()) {
             return "Укажите название: /remove <название>";
         }
-        List<Movie> movies = storage.getAll(userId);
-        Integer number = parseNumber(argument);
-        for (int i = 0; i < movies.size(); i++) {
-            if (number != null && number == i + 1 || movies.get(i).title().equalsIgnoreCase(argument)) {
-                storage.remove(userId, movies.get(i).id());
+        for (Movie movie : storage.getAll(userId)) {
+            if (movie.title().equalsIgnoreCase(title)) {
+                storage.remove(userId, movie.id());
                 return "Фильм удалён";
             }
         }
@@ -138,7 +113,7 @@ public class BotLogic {
     private String showList(long userId) {
         List<Movie> movies = storage.getAll(userId);
         if (movies.isEmpty()) {
-            return "Список пока пуст. Добавь фильм командой /add <название>";
+            return "Список пока пуст. Найдите фильм командой /find <название>";
         }
         List<String> lines = new ArrayList<>();
         for (int i = 0; i < movies.size(); i++) {

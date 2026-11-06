@@ -48,7 +48,7 @@ class JdbcWatchlistStorageTest {
      * У пользователя, которого хранилище не знает, список пустой.
      */
     @Test
-    void emptyListForUnknownUser() {
+    void emptyForUnknownUser() {
         Assertions.assertEquals(List.of(), storage.getAll(firstUserId));
     }
 
@@ -56,8 +56,9 @@ class JdbcWatchlistStorageTest {
      * Фильм возвращается целиком: идентификатор, название, год и рейтинг сохраняются без потерь.
      */
     @Test
-    void movieAllFields() {
+    void storesAllFields() {
         Assertions.assertTrue(storage.add(firstUserId, matrix));
+
         Assertions.assertEquals(List.of(matrix), storage.getAll(firstUserId));
     }
 
@@ -65,10 +66,11 @@ class JdbcWatchlistStorageTest {
      * Фильмы возвращаются в том порядке, в котором их добавили.
      */
     @Test
-    void correctOrder() {
+    void keepsInsertionOrder() {
         storage.add(firstUserId, matrix);
         storage.add(firstUserId, avatar);
         storage.add(firstUserId, dune);
+
         Assertions.assertEquals(List.of(matrix, avatar, dune), storage.getAll(firstUserId));
     }
 
@@ -76,9 +78,10 @@ class JdbcWatchlistStorageTest {
      * Один и тот же фильм нельзя добавить пользователю дважды.
      */
     @Test
-    void notAddedTwice() {
+    void noDuplicates() {
         Assertions.assertTrue(storage.add(firstUserId, matrix));
         Assertions.assertFalse(storage.add(firstUserId, matrix));
+
         Assertions.assertEquals(List.of(matrix), storage.getAll(firstUserId));
     }
 
@@ -92,6 +95,7 @@ class JdbcWatchlistStorageTest {
 
         Assertions.assertTrue(storage.add(firstUserId, islandOld));
         Assertions.assertTrue(storage.add(firstUserId, islandNew));
+
         Assertions.assertEquals(List.of(islandOld, islandNew), storage.getAll(firstUserId));
     }
 
@@ -99,11 +103,11 @@ class JdbcWatchlistStorageTest {
      * Списки разных пользователей не пересекаются, а один фильм может быть у обоих.
      */
     @Test
-    void listsOfDifferentUsers() {
+    void usersAreIndependent() {
         storage.add(firstUserId, matrix);
         storage.add(secondUserId, avatar);
-
         Assertions.assertTrue(storage.add(secondUserId, matrix));
+
         Assertions.assertEquals(List.of(matrix), storage.getAll(firstUserId));
         Assertions.assertEquals(List.of(avatar, matrix), storage.getAll(secondUserId));
     }
@@ -112,10 +116,12 @@ class JdbcWatchlistStorageTest {
      * Возвращённый список нельзя изменить, а последующие добавления в него не попадают.
      */
     @Test
-    void getAllIsImmutableSnapshot() {
+    void returnsImmutableSnapshot() {
         storage.add(firstUserId, matrix);
         List<Movie> snapshot = storage.getAll(firstUserId);
+
         Assertions.assertThrows(UnsupportedOperationException.class, () -> snapshot.add(avatar));
+
         storage.add(firstUserId, avatar);
         Assertions.assertEquals(List.of(matrix), snapshot);
     }
@@ -137,7 +143,7 @@ class JdbcWatchlistStorageTest {
      * Удалённый фильм можно добавить снова, он встаёт в конец списка.
      */
     @Test
-    void addAfterRemove() {
+    void readdAfterRemove() {
         storage.add(firstUserId, matrix);
         storage.add(firstUserId, avatar);
         storage.remove(firstUserId, matrix.id());
@@ -169,7 +175,7 @@ class JdbcWatchlistStorageTest {
      * Удаление у одного пользователя не затрагивает тот же фильм у другого.
      */
     @Test
-    void removeIsolatedByUser() {
+    void removeKeepsOtherUsers() {
         storage.add(firstUserId, matrix);
         storage.add(secondUserId, matrix);
 
@@ -186,6 +192,7 @@ class JdbcWatchlistStorageTest {
         long bigUserId = 5_000_000_000L;
         Movie bigMovie = new Movie(6_000_000_000L, "Матрица", 1999, 8.5);
         storage.add(bigUserId, bigMovie);
+
         Assertions.assertEquals(List.of(bigMovie), storage.getAll(bigUserId));
         Assertions.assertEquals(List.of(), storage.getAll(firstUserId));
     }
@@ -197,6 +204,7 @@ class JdbcWatchlistStorageTest {
     void specialCharacters() {
         Movie strange = new Movie(1, "O'Brien; DROP TABLE watchlist_movies; -- 😀 \"кавычки\"", 0, 0);
         storage.add(firstUserId, strange);
+
         Assertions.assertEquals(List.of(strange), storage.getAll(firstUserId));
         Assertions.assertTrue(storage.remove(firstUserId, strange.id()));
     }
@@ -205,7 +213,7 @@ class JdbcWatchlistStorageTest {
      * Данные остаются в файле базы и видны при повторном открытии другим экземпляром хранилища.
      */
     @Test
-    void dataPersists() {
+    void survivesReopen() {
         String url = urlOf("reopen.db");
         JdbcWatchlistStorage first = new JdbcWatchlistStorage(url);
         first.add(1L, matrix);
@@ -222,12 +230,13 @@ class JdbcWatchlistStorageTest {
      * Повторное открытие существующей базы не стирает данные и не падает на уже созданной таблице.
      */
     @Test
-    void reopenKeepsTable() {
+    void reopenKeepsData() {
         String url = urlOf("again.db");
         new JdbcWatchlistStorage(url).add(1L, matrix);
 
         JdbcWatchlistStorage second = new JdbcWatchlistStorage(url);
         second.add(1L, avatar);
+
         Assertions.assertEquals(List.of(matrix, avatar), second.getAll(1L));
     }
 
@@ -236,8 +245,10 @@ class JdbcWatchlistStorageTest {
      */
     @Test
     void invalidUrl() {
-        Assertions.assertThrows(IllegalStateException.class,
+        IllegalStateException exception = Assertions.assertThrows(IllegalStateException.class,
                 () -> new JdbcWatchlistStorage("jdbc:no-such-database:test"));
+        Assertions.assertEquals("Не удалось подготовить базу данных jdbc:no-such-database:test",
+                exception.getMessage());
     }
 
     /**
@@ -248,7 +259,9 @@ class JdbcWatchlistStorageTest {
     void unavailableFile() {
         String url = urlOf("no-such-directory/watchlist.db");
 
-        Assertions.assertThrows(IllegalStateException.class, () -> new JdbcWatchlistStorage(url));
+        IllegalStateException exception = Assertions.assertThrows(IllegalStateException.class,
+                () -> new JdbcWatchlistStorage(url));
+        Assertions.assertEquals("Не удалось подготовить базу данных " + url, exception.getMessage());
     }
 
     /**
