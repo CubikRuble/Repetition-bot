@@ -22,7 +22,7 @@ import java.util.List;
 public class KinopoiskCatalog implements MovieCatalog {
 
     /** Адрес поиска фильмов по названию. */
-    private static final String SEARCH_URL = "https://api.kinopoisk.dev/v1.4/movie/search";
+    private static final String SEARCH_URL = "https://eu-api.poiskkino.dev/v1.4/movie/search";
 
     /** Название заголовка, в котором передаётся токен доступа. */
     private static final String TOKEN_HEADER = "X-API-KEY";
