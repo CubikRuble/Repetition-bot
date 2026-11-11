@@ -28,10 +28,10 @@ public class KinopoiskCatalog implements MovieCatalog {
     private static final String TOKEN_HEADER = "X-API-KEY";
 
     /** Максимальное время ожидания ответа сайта в секундах. */
-    private final int timeoutSeconds = 10;
+    private static final int timeoutSeconds = 10;
 
     /** Код успешного ответа HTTP. */
-    private final int httpOk = 200;
+    private static final int httpOk = 200;
 
     /** Токен доступа к API. */
     private final String apiToken;
