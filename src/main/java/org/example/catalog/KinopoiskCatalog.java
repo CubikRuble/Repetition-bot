@@ -47,7 +47,6 @@ public class KinopoiskCatalog implements MovieCatalog {
         this.apiToken = apiToken;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(timeoutSeconds))
-                .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
     }
 
@@ -71,13 +70,7 @@ public class KinopoiskCatalog implements MovieCatalog {
             HttpResponse<String> response = httpClient.send(request,
                     HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (response.statusCode() != httpOk) {
-                String location = response.headers()
-                        .firstValue("Location")
-                        .orElse("не указан");
-                throw new IOException(
-                        "Кинопоиск ответил с кодом " + response.statusCode()
-                                + ". Адрес перенаправления: " + location
-                );
+                throw new IOException("Кинопоиск ответил с кодом " + response.statusCode());
             }
             return parse(response.body());
         } catch (InterruptedException e) {
