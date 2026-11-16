@@ -9,6 +9,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.example.catalog.Movie;
 import org.example.catalog.MovieCatalog;
+import org.example.storage.WatchlistEntry;
 import org.example.storage.WatchlistStorage;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,11 +37,28 @@ class BotLogicTest {
             + "/list — показать список\n"
             + "/find <название> — найти фильм на Кинопоиске\n"
             + "/save <номер> — добавить в список фильм из последнего поиска\n"
-            + "/pick [после <год>] — посоветовать фильм из списка\n"
+            + "/pick [после <год>] — посоветовать непросмотренный фильм из списка\n"
+            + "/rate <номер> <оценка> — оценить фильм из списка (от 1 до 10) и отметить его просмотренным\n"
+            + "/stats — показать число просмотренных фильмов и среднюю оценку\n"
             + "/help — показать эту справку";
 
     /** Ожидаемый ответ, если фильм уже есть в списке. */
     private static final String ALREADY_IN_LIST = "Этот фильм уже есть в списке";
+
+    /** Ожидаемый ответ на /rate, записанную неверно. */
+    private static final String RATE_FORMAT = "Формат: /rate <номер> <оценка>";
+
+    /** Ожидаемый ответ на /rate с недопустимой оценкой. */
+    private static final String RATING_RANGE = "Оценка должна быть целым числом от 1 до 10";
+
+    /** Ожидаемый ответ на /stats, если оценок нет. */
+    private static final String NO_RATINGS = "Вы пока ничего не оценили";
+
+    /** Ожидаемый ответ на /pick, если советовать нечего. */
+    private static final String NOTHING_TO_PICK = "В вашем списке нет подходящих фильмов";
+
+    /** Ожидаемый ответ после оценки «Матрицы» на 9. */
+    private static final String MATRIX_RATED_9 = "Фильм «Матрица» отмечен как просмотренный, оценка 9";
 
     /** Ожидаемый ответ на /find «Матрица» (каталог знает четыре фильма, показываются три). */
     private static final String MATRIX_RESULTS = "Найдено:\n"
@@ -328,6 +346,194 @@ class BotLogicTest {
     }
 
     /**
+     * Оценка отмечает фильм просмотренным (пример 1): ответ называет фильм и оценку, а /list
+     * и /stats показывают её.
+     */
+    @Test
+    void rateMarksWatched() {
+        saveFirstFound(firstUserId, "Матрица");
+        Assertions.assertEquals("1. Матрица (1999)", logic.handleMessage(firstUserId, "/list"));
+
+        Assertions.assertEquals(MATRIX_RATED_9, logic.handleMessage(firstUserId, "/rate 1 9"));
+        Assertions.assertEquals("1. Матрица (1999) — оценка 9", logic.handleMessage(firstUserId, "/list"));
+        Assertions.assertEquals("Просмотрено фильмов: 1, средняя оценка: 9.0",
+                logic.handleMessage(firstUserId, "/stats"));
+    }
+
+    /**
+     * Повторная оценка заменяет прежнюю и не увеличивает число просмотренных фильмов;
+     * команда понимает регистр, лишние пробелы и суффикс с именем бота.
+     */
+    @Test
+    void rateReplaces() {
+        saveFirstFound(firstUserId, "Матрица");
+
+        Assertions.assertEquals("Фильм «Матрица» отмечен как просмотренный, оценка 7",
+                logic.handleMessage(firstUserId, "/Rate@FirstReturnBot  1   7"));
+        Assertions.assertEquals(MATRIX_RATED_9, logic.handleMessage(firstUserId, "/rate 1 9"));
+
+        Assertions.assertEquals("1. Матрица (1999) — оценка 9", logic.handleMessage(firstUserId, "/list"));
+        Assertions.assertEquals("Просмотрено фильмов: 1, средняя оценка: 9.0",
+                logic.handleMessage(firstUserId, "/stats"));
+    }
+
+    /**
+     * Номер в /rate берётся из /list: оценивается только выбранный фильм, остальные остаются
+     * непросмотренными.
+     */
+    @Test
+    void rateChosenOnly() {
+        saveFirstFound(firstUserId, "Матрица");
+        saveFirstFound(firstUserId, "Аватар");
+        saveFirstFound(firstUserId, "Интерстеллар");
+
+        Assertions.assertEquals("Фильм «Аватар» отмечен как просмотренный, оценка 5",
+                logic.handleMessage(firstUserId, "/rate 2 5"));
+        Assertions.assertEquals("1. Матрица (1999)\n2. Аватар (2009) — оценка 5\n3. Интерстеллар (2014)",
+                logic.handleMessage(firstUserId, "/list"));
+    }
+
+    /**
+     * Крайние допустимые оценки 1 и 10 принимаются.
+     */
+    @Test
+    void rateBoundaries() {
+        saveFirstFound(firstUserId, "Матрица");
+        saveFirstFound(firstUserId, "Аватар");
+
+        Assertions.assertEquals("Фильм «Матрица» отмечен как просмотренный, оценка 1",
+                logic.handleMessage(firstUserId, "/rate 1 1"));
+        Assertions.assertEquals("Фильм «Аватар» отмечен как просмотренный, оценка 10",
+                logic.handleMessage(firstUserId, "/rate 2 10"));
+        Assertions.assertEquals("Просмотрено фильмов: 2, средняя оценка: 5.5",
+                logic.handleMessage(firstUserId, "/stats"));
+    }
+
+    /**
+     * /stats учитывает только оценённые фильмы и округляет среднюю оценку до десятых.
+     */
+    @Test
+    void statsAverage() {
+        saveFirstFound(firstUserId, "Матрица");
+        saveFirstFound(firstUserId, "Аватар");
+        saveFirstFound(firstUserId, "Интерстеллар");
+
+        logic.handleMessage(firstUserId, "/rate 1 9");
+        logic.handleMessage(firstUserId, "/rate 2 6");
+        Assertions.assertEquals("Просмотрено фильмов: 2, средняя оценка: 7.5",
+                logic.handleMessage(firstUserId, "/stats"));
+
+        logic.handleMessage(firstUserId, "/rate 3 8");
+        Assertions.assertEquals("Просмотрено фильмов: 3, средняя оценка: 7.7",
+                logic.handleMessage(firstUserId, "/stats"));
+    }
+
+    /**
+     * Без оценок /stats сообщает, что оценивать пока нечего: и при пустом списке, и когда
+     * в списке есть только непросмотренные фильмы.
+     */
+    @Test
+    void statsEmpty() {
+        Assertions.assertEquals(NO_RATINGS, logic.handleMessage(firstUserId, "/stats"));
+
+        saveFirstFound(firstUserId, "Матрица");
+        Assertions.assertEquals(NO_RATINGS, logic.handleMessage(firstUserId, "/stats"));
+    }
+
+    /**
+     * Удалённый оценённый фильм пропадает из статистики.
+     */
+    @Test
+    void statsAfterRemove() {
+        saveFirstFound(firstUserId, "Матрица");
+        logic.handleMessage(firstUserId, "/rate 1 9");
+
+        Assertions.assertEquals("Фильм удалён", logic.handleMessage(firstUserId, "/remove Матрица"));
+        Assertions.assertEquals(NO_RATINGS, logic.handleMessage(firstUserId, "/stats"));
+        Assertions.assertEquals(EMPTY_LIST, logic.handleMessage(firstUserId, "/list"));
+    }
+
+    /**
+     * Номер вне списка (в том числе у пустого списка) ничего не оценивает и называется в ответе.
+     */
+    @Test
+    void rateUnknownNumber() {
+        Assertions.assertEquals("В списке нет фильма с номером 1", logic.handleMessage(secondUserId, "/rate 1 5"));
+
+        saveFirstFound(firstUserId, "Матрица");
+        for (String number : new String[] {"0", "2", "5", "-1"}) {
+            Assertions.assertEquals("В списке нет фильма с номером " + number,
+                    logic.handleMessage(firstUserId, "/rate " + number + " 8"));
+        }
+        Assertions.assertEquals("1. Матрица (1999)", logic.handleMessage(firstUserId, "/list"));
+    }
+
+    /**
+     * Оценка вне диапазона от 1 до 10 или не целое число отклоняется, фильм остаётся непросмотренным.
+     */
+    @Test
+    void rateInvalidRating() {
+        saveFirstFound(firstUserId, "Матрица");
+
+        for (String rating : new String[] {"0", "11", "-3", "7.5", "abc", "10x"}) {
+            Assertions.assertEquals(RATING_RANGE, logic.handleMessage(firstUserId, "/rate 1 " + rating));
+        }
+        Assertions.assertEquals("1. Матрица (1999)", logic.handleMessage(firstUserId, "/list"));
+        Assertions.assertEquals(NO_RATINGS, logic.handleMessage(firstUserId, "/stats"));
+    }
+
+    /**
+     * Неверная запись /rate (нет аргументов, нет оценки, номер не число, лишние слова) даёт
+     * подсказку формата и ничего не меняет.
+     */
+    @Test
+    void rateWrongFormat() {
+        saveFirstFound(firstUserId, "Матрица");
+
+        for (String input : new String[] {"/rate", "/rate 1", "/rate abc 5", "/rate 1 2 3"}) {
+            Assertions.assertEquals(RATE_FORMAT, logic.handleMessage(firstUserId, input));
+        }
+        Assertions.assertEquals("1. Матрица (1999)", logic.handleMessage(firstUserId, "/list"));
+    }
+
+    /**
+     * /pick советует только непросмотренные фильмы (пример 2): оценённый фильм пропускается,
+     * даже если у него лучший рейтинг, а когда непросмотренных не осталось, советовать нечего.
+     */
+    @Test
+    void pickSkipsWatched() {
+        saveFirstFound(firstUserId, "Матрица");
+        saveFirstFound(firstUserId, "Аватар");
+        Assertions.assertEquals("Советую посмотреть: Матрица (1999), рейтинг 8.5",
+                logic.handleMessage(firstUserId, "/pick"));
+
+        logic.handleMessage(firstUserId, "/rate 1 9");
+        Assertions.assertEquals("Советую посмотреть: Аватар (2009), рейтинг 7.9",
+                logic.handleMessage(firstUserId, "/pick"));
+        Assertions.assertEquals(NOTHING_TO_PICK, logic.handleMessage(firstUserId, "/pick после 2010"));
+
+        logic.handleMessage(firstUserId, "/rate 2 5");
+        Assertions.assertEquals(NOTHING_TO_PICK, logic.handleMessage(firstUserId, "/pick"));
+    }
+
+    /**
+     * Оценки у пользователей свои: оценка одного не делает фильм просмотренным у другого.
+     */
+    @Test
+    void ratingsPerUser() {
+        saveFirstFound(firstUserId, "Матрица");
+        saveFirstFound(secondUserId, "Матрица");
+
+        Assertions.assertEquals(MATRIX_RATED_9, logic.handleMessage(firstUserId, "/rate 1 9"));
+
+        Assertions.assertEquals("1. Матрица (1999)", logic.handleMessage(secondUserId, "/list"));
+        Assertions.assertEquals(NO_RATINGS, logic.handleMessage(secondUserId, "/stats"));
+        Assertions.assertEquals("Советую посмотреть: Матрица (1999), рейтинг 8.5",
+                logic.handleMessage(secondUserId, "/pick"));
+        Assertions.assertEquals(NOTHING_TO_PICK, logic.handleMessage(firstUserId, "/pick"));
+    }
+
+    /**
      * Ищет фильм и сохраняет первый из найденных, как это делает пользователь командами /find и /save.
      * @param userId идентификатор пользователя
      * @param title название для поиска
@@ -342,30 +548,49 @@ class BotLogicTest {
      */
     private class FakeStorage implements WatchlistStorage {
 
-        /** Списки фильмов по идентификаторам пользователей. */
-        private final Map<Long, List<Movie>> lists = new ConcurrentHashMap<>();
+        /** Записи списков по идентификаторам пользователей. */
+        private final Map<Long, List<WatchlistEntry>> lists = new ConcurrentHashMap<>();
 
         /**
          * Возвращает копию списка пользователя.
          * @param userId идентификатор пользователя
-         * @return фильмы в порядке добавления
+         * @return записи в порядке добавления
          */
         @Override
-        public List<Movie> getAll(long userId) {
+        public List<WatchlistEntry> getAll(long userId) {
             return List.copyOf(lists.getOrDefault(userId, List.of()));
         }
 
         /**
-         * Добавляет фильм, если фильма с таким идентификатором у пользователя нет.
+         * Добавляет фильм без оценки, если фильма с таким идентификатором у пользователя нет.
          * @param userId идентификатор пользователя
          * @param movie фильм
          * @return {@code true}, если фильм добавлен
          */
         @Override
         public boolean add(long userId, Movie movie) {
-            List<Movie> movies = lists.computeIfAbsent(userId, id -> new CopyOnWriteArrayList<>());
-            boolean exists = movies.stream().anyMatch(saved -> saved.id() == movie.id());
-            return !exists && movies.add(movie);
+            List<WatchlistEntry> entries = lists.computeIfAbsent(userId, id -> new CopyOnWriteArrayList<>());
+            boolean exists = entries.stream().anyMatch(saved -> saved.movie().id() == movie.id());
+            return !exists && entries.add(new WatchlistEntry(movie, WatchlistEntry.NOT_RATED));
+        }
+
+        /**
+         * Заменяет оценку фильма пользователя.
+         * @param userId идентификатор пользователя
+         * @param movieId идентификатор фильма
+         * @param rating новая оценка
+         * @return {@code true}, если фильм был в списке
+         */
+        @Override
+        public boolean rate(long userId, long movieId, int rating) {
+            List<WatchlistEntry> entries = lists.getOrDefault(userId, new CopyOnWriteArrayList<>());
+            for (int i = 0; i < entries.size(); i++) {
+                if (entries.get(i).movie().id() == movieId) {
+                    entries.set(i, new WatchlistEntry(entries.get(i).movie(), rating));
+                    return true;
+                }
+            }
+            return false;
         }
 
         /**
@@ -376,7 +601,8 @@ class BotLogicTest {
          */
         @Override
         public boolean remove(long userId, long movieId) {
-            return lists.getOrDefault(userId, new CopyOnWriteArrayList<>()).removeIf(movie -> movie.id() == movieId);
+            return lists.getOrDefault(userId, new CopyOnWriteArrayList<>())
+                    .removeIf(entry -> entry.movie().id() == movieId);
         }
     }
 }

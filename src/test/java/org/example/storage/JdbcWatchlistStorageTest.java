@@ -1,6 +1,11 @@
 package org.example.storage;
 
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
 import java.util.List;
 import org.example.catalog.Movie;
 import org.junit.jupiter.api.Assertions;
@@ -59,7 +64,7 @@ class JdbcWatchlistStorageTest {
     void storesAllFields() {
         Assertions.assertTrue(storage.add(firstUserId, matrix));
 
-        Assertions.assertEquals(List.of(matrix), storage.getAll(firstUserId));
+        Assertions.assertEquals(unrated(matrix), storage.getAll(firstUserId));
     }
 
     /**
@@ -71,7 +76,7 @@ class JdbcWatchlistStorageTest {
         storage.add(firstUserId, avatar);
         storage.add(firstUserId, dune);
 
-        Assertions.assertEquals(List.of(matrix, avatar, dune), storage.getAll(firstUserId));
+        Assertions.assertEquals(unrated(matrix, avatar, dune), storage.getAll(firstUserId));
     }
 
     /**
@@ -82,7 +87,7 @@ class JdbcWatchlistStorageTest {
         Assertions.assertTrue(storage.add(firstUserId, matrix));
         Assertions.assertFalse(storage.add(firstUserId, matrix));
 
-        Assertions.assertEquals(List.of(matrix), storage.getAll(firstUserId));
+        Assertions.assertEquals(unrated(matrix), storage.getAll(firstUserId));
     }
 
     /**
@@ -96,7 +101,7 @@ class JdbcWatchlistStorageTest {
         Assertions.assertTrue(storage.add(firstUserId, islandOld));
         Assertions.assertTrue(storage.add(firstUserId, islandNew));
 
-        Assertions.assertEquals(List.of(islandOld, islandNew), storage.getAll(firstUserId));
+        Assertions.assertEquals(unrated(islandOld, islandNew), storage.getAll(firstUserId));
     }
 
     /**
@@ -108,8 +113,8 @@ class JdbcWatchlistStorageTest {
         storage.add(secondUserId, avatar);
         Assertions.assertTrue(storage.add(secondUserId, matrix));
 
-        Assertions.assertEquals(List.of(matrix), storage.getAll(firstUserId));
-        Assertions.assertEquals(List.of(avatar, matrix), storage.getAll(secondUserId));
+        Assertions.assertEquals(unrated(matrix), storage.getAll(firstUserId));
+        Assertions.assertEquals(unrated(avatar, matrix), storage.getAll(secondUserId));
     }
 
     /**
@@ -118,12 +123,14 @@ class JdbcWatchlistStorageTest {
     @Test
     void returnsImmutableSnapshot() {
         storage.add(firstUserId, matrix);
-        List<Movie> snapshot = storage.getAll(firstUserId);
+        List<WatchlistEntry> snapshot = storage.getAll(firstUserId);
 
-        Assertions.assertThrows(UnsupportedOperationException.class, () -> snapshot.add(avatar));
+        WatchlistEntry extra = new WatchlistEntry(avatar, WatchlistEntry.NOT_RATED);
+
+        Assertions.assertThrows(UnsupportedOperationException.class, () -> snapshot.add(extra));
 
         storage.add(firstUserId, avatar);
-        Assertions.assertEquals(List.of(matrix), snapshot);
+        Assertions.assertEquals(unrated(matrix), snapshot);
     }
 
     /**
@@ -136,7 +143,7 @@ class JdbcWatchlistStorageTest {
         storage.add(firstUserId, dune);
 
         Assertions.assertTrue(storage.remove(firstUserId, avatar.id()));
-        Assertions.assertEquals(List.of(matrix, dune), storage.getAll(firstUserId));
+        Assertions.assertEquals(unrated(matrix, dune), storage.getAll(firstUserId));
     }
 
     /**
@@ -149,7 +156,7 @@ class JdbcWatchlistStorageTest {
         storage.remove(firstUserId, matrix.id());
 
         Assertions.assertTrue(storage.add(firstUserId, matrix));
-        Assertions.assertEquals(List.of(avatar, matrix), storage.getAll(firstUserId));
+        Assertions.assertEquals(unrated(avatar, matrix), storage.getAll(firstUserId));
     }
 
     /**
@@ -160,7 +167,7 @@ class JdbcWatchlistStorageTest {
         storage.add(firstUserId, matrix);
 
         Assertions.assertFalse(storage.remove(firstUserId, avatar.id()));
-        Assertions.assertEquals(List.of(matrix), storage.getAll(firstUserId));
+        Assertions.assertEquals(unrated(matrix), storage.getAll(firstUserId));
     }
 
     /**
@@ -181,7 +188,7 @@ class JdbcWatchlistStorageTest {
 
         Assertions.assertTrue(storage.remove(firstUserId, matrix.id()));
         Assertions.assertEquals(List.of(), storage.getAll(firstUserId));
-        Assertions.assertEquals(List.of(matrix), storage.getAll(secondUserId));
+        Assertions.assertEquals(unrated(matrix), storage.getAll(secondUserId));
     }
 
     /**
@@ -193,7 +200,7 @@ class JdbcWatchlistStorageTest {
         Movie bigMovie = new Movie(6_000_000_000L, "Матрица", 1999, 8.5);
         storage.add(bigUserId, bigMovie);
 
-        Assertions.assertEquals(List.of(bigMovie), storage.getAll(bigUserId));
+        Assertions.assertEquals(unrated(bigMovie), storage.getAll(bigUserId));
         Assertions.assertEquals(List.of(), storage.getAll(firstUserId));
     }
 
@@ -205,7 +212,7 @@ class JdbcWatchlistStorageTest {
         Movie strange = new Movie(1, "O'Brien; DROP TABLE watchlist_movies; -- 😀 \"кавычки\"", 0, 0);
         storage.add(firstUserId, strange);
 
-        Assertions.assertEquals(List.of(strange), storage.getAll(firstUserId));
+        Assertions.assertEquals(unrated(strange), storage.getAll(firstUserId));
         Assertions.assertTrue(storage.remove(firstUserId, strange.id()));
     }
 
@@ -222,8 +229,8 @@ class JdbcWatchlistStorageTest {
 
         JdbcWatchlistStorage second = new JdbcWatchlistStorage(url);
 
-        Assertions.assertEquals(List.of(matrix, avatar), second.getAll(1L));
-        Assertions.assertEquals(List.of(dune), second.getAll(2L));
+        Assertions.assertEquals(unrated(matrix, avatar), second.getAll(1L));
+        Assertions.assertEquals(unrated(dune), second.getAll(2L));
     }
 
     /**
@@ -237,7 +244,152 @@ class JdbcWatchlistStorageTest {
         JdbcWatchlistStorage second = new JdbcWatchlistStorage(url);
         second.add(1L, avatar);
 
-        Assertions.assertEquals(List.of(matrix, avatar), second.getAll(1L));
+        Assertions.assertEquals(unrated(matrix, avatar), second.getAll(1L));
+    }
+
+    /**
+     * Оценка сохраняется у выбранного фильма и читается вместе с ним; остальные фильмы
+     * остаются без оценки и сохраняют порядок.
+     */
+    @Test
+    void rateChosenMovie() {
+        storage.add(firstUserId, matrix);
+        storage.add(firstUserId, avatar);
+        storage.add(firstUserId, dune);
+
+        Assertions.assertTrue(storage.rate(firstUserId, avatar.id(), 8));
+
+        Assertions.assertEquals(List.of(new WatchlistEntry(matrix, WatchlistEntry.NOT_RATED),
+                        new WatchlistEntry(avatar, 8), new WatchlistEntry(dune, WatchlistEntry.NOT_RATED)),
+                storage.getAll(firstUserId));
+    }
+
+    /**
+     * Повторная оценка заменяет прежнюю.
+     */
+    @Test
+    void rateReplacesRating() {
+        storage.add(firstUserId, matrix);
+        storage.rate(firstUserId, matrix.id(), 4);
+
+        Assertions.assertTrue(storage.rate(firstUserId, matrix.id(), 9));
+
+        Assertions.assertEquals(List.of(new WatchlistEntry(matrix, 9)), storage.getAll(firstUserId));
+    }
+
+    /**
+     * Фильм без оценки не считается просмотренным, а с оценкой считается.
+     */
+    @Test
+    void watchedStatus() {
+        storage.add(firstUserId, matrix);
+        storage.add(firstUserId, avatar);
+        storage.rate(firstUserId, avatar.id(), 6);
+
+        List<WatchlistEntry> entries = storage.getAll(firstUserId);
+
+        Assertions.assertFalse(entries.get(0).isWatched());
+        Assertions.assertTrue(entries.get(1).isWatched());
+    }
+
+    /**
+     * Оценить можно только фильм из списка: у неизвестного пользователя и для чужого фильма
+     * хранилище отвечает {@code false} и ничего не создаёт.
+     */
+    @Test
+    void rateMissing() {
+        storage.add(firstUserId, matrix);
+
+        Assertions.assertFalse(storage.rate(firstUserId, avatar.id(), 7));
+        Assertions.assertFalse(storage.rate(secondUserId, matrix.id(), 7));
+
+        Assertions.assertEquals(unrated(matrix), storage.getAll(firstUserId));
+        Assertions.assertEquals(List.of(), storage.getAll(secondUserId));
+    }
+
+    /**
+     * Оценка принадлежит паре «пользователь — фильм»: у второго пользователя тот же фильм
+     * остаётся без оценки.
+     */
+    @Test
+    void rateKeepsOtherUsers() {
+        storage.add(firstUserId, matrix);
+        storage.add(secondUserId, matrix);
+
+        Assertions.assertTrue(storage.rate(firstUserId, matrix.id(), 10));
+
+        Assertions.assertEquals(List.of(new WatchlistEntry(matrix, 10)), storage.getAll(firstUserId));
+        Assertions.assertEquals(unrated(matrix), storage.getAll(secondUserId));
+    }
+
+    /**
+     * Повторное добавление фильма, который уже в списке, не стирает его оценку.
+     */
+    @Test
+    void readdKeepsRating() {
+        storage.add(firstUserId, matrix);
+        storage.rate(firstUserId, matrix.id(), 9);
+
+        Assertions.assertFalse(storage.add(firstUserId, matrix));
+
+        Assertions.assertEquals(List.of(new WatchlistEntry(matrix, 9)), storage.getAll(firstUserId));
+    }
+
+    /**
+     * Фильм, удалённый и добавленный снова, возвращается в список без прежней оценки.
+     */
+    @Test
+    void readdAfterRemoveResetsRating() {
+        storage.add(firstUserId, matrix);
+        storage.rate(firstUserId, matrix.id(), 9);
+        storage.remove(firstUserId, matrix.id());
+
+        Assertions.assertTrue(storage.add(firstUserId, matrix));
+
+        Assertions.assertEquals(unrated(matrix), storage.getAll(firstUserId));
+    }
+
+    /**
+     * Оценки остаются в файле базы и видны после повторного открытия, то есть переживают
+     * перезапуск бота.
+     */
+    @Test
+    void ratingsSurviveReopen() {
+        String url = urlOf("ratings.db");
+        JdbcWatchlistStorage first = new JdbcWatchlistStorage(url);
+        first.add(1L, matrix);
+        first.add(1L, avatar);
+        first.rate(1L, matrix.id(), 9);
+
+        JdbcWatchlistStorage second = new JdbcWatchlistStorage(url);
+
+        Assertions.assertEquals(List.of(new WatchlistEntry(matrix, 9),
+                new WatchlistEntry(avatar, WatchlistEntry.NOT_RATED)), second.getAll(1L));
+    }
+
+    /**
+     * База, созданная до появления оценок, обновляется при открытии: сохранённые фильмы остаются,
+     * получают статус «не оценён» и их можно оценить.
+     * @throws SQLException если не удалось подготовить старую базу
+     */
+    @Test
+    void upgradesOldDatabase() throws SQLException {
+        String url = urlOf("old.db");
+        try (Connection connection = DriverManager.getConnection(url);
+             Statement statement = connection.createStatement()) {
+            statement.executeUpdate("CREATE TABLE watchlist_movies ("
+                    + "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, "
+                    + "movie_id INTEGER NOT NULL, title TEXT NOT NULL, year INTEGER NOT NULL, "
+                    + "rating REAL NOT NULL, UNIQUE (user_id, movie_id))");
+            statement.executeUpdate("INSERT INTO watchlist_movies (user_id, movie_id, title, year, rating) "
+                    + "VALUES (1, 301, 'Матрица', 1999, 8.5)");
+        }
+
+        JdbcWatchlistStorage upgraded = new JdbcWatchlistStorage(url);
+
+        Assertions.assertEquals(unrated(matrix), upgraded.getAll(1L));
+        Assertions.assertTrue(upgraded.rate(1L, matrix.id(), 9));
+        Assertions.assertEquals(List.of(new WatchlistEntry(matrix, 9)), upgraded.getAll(1L));
     }
 
     /**
@@ -262,6 +414,19 @@ class JdbcWatchlistStorageTest {
         IllegalStateException exception = Assertions.assertThrows(IllegalStateException.class,
                 () -> new JdbcWatchlistStorage(url));
         Assertions.assertEquals("Не удалось подготовить базу данных " + url, exception.getMessage());
+    }
+
+    /**
+     * Превращает фильмы в записи списка без оценки, в том же порядке.
+     * @param movies фильмы
+     * @return записи с оценкой {@link WatchlistEntry#NOT_RATED}
+     */
+    private List<WatchlistEntry> unrated(Movie... movies) {
+        List<WatchlistEntry> entries = new ArrayList<>();
+        for (Movie movie : movies) {
+            entries.add(new WatchlistEntry(movie, WatchlistEntry.NOT_RATED));
+        }
+        return entries;
     }
 
     /**

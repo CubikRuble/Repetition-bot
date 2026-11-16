@@ -8,13 +8,15 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.example.catalog.Movie;
 import org.example.catalog.MovieCatalog;
+import org.example.storage.WatchlistEntry;
 import org.example.storage.WatchlistStorage;
 
 /**
- * Логика диалога бота: список «посмотреть позже», поиск фильмов в каталоге и подбор фильма.
- * В списке хранятся объекты {@link Movie} с уникальным идентификатором Кинопоиска.
- * Класс не зависит от Telegram: принимает идентификатор пользователя и текст сообщения,
- * возвращает текст ответа.
+ * Логика диалога бота: список «посмотреть позже», поиск фильмов в каталоге, оценки просмотренных
+ * фильмов, статистика и подбор фильма. В списке хранятся записи {@link WatchlistEntry}: фильм
+ * ({@link Movie}) с уникальным идентификатором Кинопоиска и оценка пользователя. Фильм с оценкой
+ * считается просмотренным. Класс не зависит от Telegram: принимает идентификатор пользователя
+ * и текст сообщения, возвращает текст ответа.
  */
 public class BotLogic {
 
@@ -25,7 +27,9 @@ public class BotLogic {
             + "/list — показать список\n"
             + "/find <название> — найти фильм на Кинопоиске\n"
             + "/save <номер> — добавить в список фильм из последнего поиска\n"
-            + "/pick [после <год>] — посоветовать фильм из списка\n"
+            + "/pick [после <год>] — посоветовать непросмотренный фильм из списка\n"
+            + "/rate <номер> <оценка> — оценить фильм из списка (от 1 до 10) и отметить его просмотренным\n"
+            + "/stats — показать число просмотренных фильмов и среднюю оценку\n"
             + "/help — показать эту справку";
 
     /** Ответ, если по запросу ничего не найдено. */
@@ -37,8 +41,23 @@ public class BotLogic {
     /** Ответ при попытке сохранить фильм, который уже есть в списке. */
     private static final String ALREADY_IN_LIST_TEXT = "Этот фильм уже есть в списке";
 
+    /** Ответ на /rate, если команда записана неверно. */
+    private static final String RATE_FORMAT_TEXT = "Формат: /rate <номер> <оценка>";
+
+    /** Ответ на /rate, если оценка не является целым числом от 1 до 10. */
+    private static final String RATING_RANGE_TEXT = "Оценка должна быть целым числом от 1 до 10";
+
+    /** Ответ на /stats, если пользователь ещё не оценил ни одного фильма. */
+    private static final String NO_RATINGS_TEXT = "Вы пока ничего не оценили";
+
     /** Сколько фильмов показывает команда /find. */
-    private final int findLimit = 3;
+    private static final int findLimit = 3;
+
+    /** Наименьшая допустимая оценка. */
+    private static final int minRating = 1;
+
+    /** Наибольшая допустимая оценка. */
+    private static final int maxRating = 10;
 
     /** Хранилище, в котором лежат списки всех пользователей. */
     private final WatchlistStorage storage;
@@ -81,6 +100,8 @@ public class BotLogic {
             case "/find" -> findMovies(userId, argument);
             case "/save" -> saveFound(userId, argument);
             case "/pick" -> pickMovie(userId, argument);
+            case "/rate" -> rateMovie(userId, argument);
+            case "/stats" -> showStats(userId);
             default -> "Не понял вас. Список команд: /help";
         };
     }
@@ -96,9 +117,9 @@ public class BotLogic {
         if (title.isEmpty()) {
             return "Укажите название: /remove <название>";
         }
-        for (Movie movie : storage.getAll(userId)) {
-            if (movie.title().equalsIgnoreCase(title)) {
-                storage.remove(userId, movie.id());
+        for (WatchlistEntry entry : storage.getAll(userId)) {
+            if (entry.movie().title().equalsIgnoreCase(title)) {
+                storage.remove(userId, entry.movie().id());
                 return "Фильм удалён";
             }
         }
@@ -106,18 +127,24 @@ public class BotLogic {
     }
 
     /**
-     * Формирует нумерованный список фильмов пользователя, по одному в строке.
+     * Формирует нумерованный список фильмов пользователя, по одному в строке. У просмотренных
+     * фильмов после года показывается оценка пользователя.
      * @param userId идентификатор пользователя
      * @return список или сообщение о том, что он пуст
      */
     private String showList(long userId) {
-        List<Movie> movies = storage.getAll(userId);
-        if (movies.isEmpty()) {
+        List<WatchlistEntry> entries = storage.getAll(userId);
+        if (entries.isEmpty()) {
             return "Список пока пуст. Найдите фильм командой /find <название>";
         }
         List<String> lines = new ArrayList<>();
-        for (int i = 0; i < movies.size(); i++) {
-            lines.add((i + 1) + ". " + movies.get(i).title() + " (" + movies.get(i).year() + ")");
+        for (int i = 0; i < entries.size(); i++) {
+            WatchlistEntry entry = entries.get(i);
+            String line = (i + 1) + ". " + entry.movie().title() + " (" + entry.movie().year() + ")";
+            if (entry.isWatched()) {
+                line += " — оценка " + entry.userRating();
+            }
+            lines.add(line);
         }
         return String.join("\n", lines);
     }
@@ -176,8 +203,59 @@ public class BotLogic {
     }
 
     /**
-     * Советует фильм из списка пользователя с наивысшим рейтингом. Рейтинг и год берутся
-     * из сохранённых фильмов. При равных рейтингах побеждает фильм, который стоит в списке раньше.
+     * Ставит оценку фильму из списка пользователя и тем самым отмечает его просмотренным.
+     * Номер берётся из команды /list; повторная оценка заменяет прежнюю.
+     * @param userId идентификатор пользователя
+     * @param argument номер фильма и оценка через пробел; пустая строка, если их не указали
+     * @return текст ответа
+     */
+    private String rateMovie(long userId, String argument) {
+        String[] words = argument.split(" ");
+        Integer number = words.length == 2 ? parseNumber(words[0]) : null;
+        if (number == null) {
+            return RATE_FORMAT_TEXT;
+        }
+        Integer rating = parseNumber(words[1]);
+        if (rating == null || rating < minRating || rating > maxRating) {
+            return RATING_RANGE_TEXT;
+        }
+        List<WatchlistEntry> entries = storage.getAll(userId);
+        String notFoundText = "В списке нет фильма с номером " + number;
+        if (number < 1 || number > entries.size()) {
+            return notFoundText;
+        }
+        Movie movie = entries.get(number - 1).movie();
+        if (!storage.rate(userId, movie.id(), rating)) {
+            return notFoundText;
+        }
+        return "Фильм «" + movie.title() + "» отмечен как просмотренный, оценка " + rating;
+    }
+
+    /**
+     * Считает просмотренные фильмы пользователя (те, у которых есть оценка) и их среднюю оценку.
+     * @param userId идентификатор пользователя
+     * @return число просмотренных фильмов и средняя оценка либо сообщение, что оценок нет
+     */
+    private String showStats(long userId) {
+        int watchedCount = 0;
+        int ratingSum = 0;
+        for (WatchlistEntry entry : storage.getAll(userId)) {
+            if (entry.isWatched()) {
+                watchedCount++;
+                ratingSum += entry.userRating();
+            }
+        }
+        if (watchedCount == 0) {
+            return NO_RATINGS_TEXT;
+        }
+        return String.format(Locale.ROOT, "Просмотрено фильмов: %d, средняя оценка: %.1f",
+                watchedCount, (double) ratingSum / watchedCount);
+    }
+
+    /**
+     * Советует непросмотренный фильм из списка пользователя с наивысшим рейтингом. Просмотренные
+     * фильмы (с оценкой пользователя) пропускаются. Рейтинг и год берутся из сохранённых фильмов.
+     * При равных рейтингах побеждает фильм, который стоит в списке раньше.
      * @param userId идентификатор пользователя
      * @param argument пустая строка или {@code после <год>}
      * @return текст ответа
@@ -193,8 +271,9 @@ public class BotLogic {
             minYear = year;
         }
         Movie best = null;
-        for (Movie movie : storage.getAll(userId)) {
-            if (movie.year() >= minYear && (best == null || movie.rating() > best.rating())) {
+        for (WatchlistEntry entry : storage.getAll(userId)) {
+            Movie movie = entry.movie();
+            if (!entry.isWatched() && movie.year() >= minYear && (best == null || movie.rating() > best.rating())) {
                 best = movie;
             }
         }
